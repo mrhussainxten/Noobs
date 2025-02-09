@@ -1,107 +1,88 @@
 const fs = require('fs');
 const path = require('path');
-const isAdmin = require('../helpers/isAdmin');
-const { channelInfo } = require('../config/messageConfig');
+const isAdmin = global.isAdmin
 
-// Define paths
-const databaseDir = path.join(process.cwd(), 'database');
-const warningsPath = path.join(databaseDir, 'warnings.json');
+const warningsFilePath = path.join(__dirname, '../Nayan/data/warnings.json');
 
-// Initialize warnings file if it doesn't exist
-function initializeWarningsFile() {
-    // Create database directory if it doesn't exist
-    if (!fs.existsSync(databaseDir)) {
-        fs.mkdirSync(databaseDir, { recursive: true });
+function loadWarnings() {
+    if (!fs.existsSync(warningsFilePath)) {
+        fs.writeFileSync(warningsFilePath, JSON.stringify({}), 'utf8');
     }
-    
-    // Create warnings.json if it doesn't exist
-    if (!fs.existsSync(warningsPath)) {
-        fs.writeFileSync(warningsPath, JSON.stringify({}), 'utf8');
-    }
+    const data = fs.readFileSync(warningsFilePath, 'utf8');
+    return JSON.parse(data);
 }
 
-async function warnCommand(sock, chatId, senderId, mentionedJids, message) {
-    // Initialize files first
-    initializeWarningsFile();
+function saveWarnings(warnings) {
+    fs.writeFileSync(warningsFilePath, JSON.stringify(warnings, null, 2), 'utf8');
+}
 
-    const { isSenderAdmin, isBotAdmin } = await isAdmin(sock, chatId, senderId);
+  module.exports = {
+    config: {
+      name: 'warn',
+      aliases: [],
+      permission: 2,
+      prefix: 'both',
+      description: 'Warns a user. After 3 warnings, the user is removed from the group.',
+      usage: [
+        `${global.config.PREFIX}warn @user - Warns the mentioned user.`,
+        `${global.config.PREFIX}warn @user list - Shows the warning count for the mentioned user.`,
+      ],
+      categories: 'Moderation',
+      credit: 'Developed by Mohammad Nayan',
+    },
+
+  start: async ({ api, event, args }) => {
+    const { isGroup, threadId: chatId, senderId, mentions } = event;
+
+    if (!isGroup) {
+      await api.sendMessage(chatId, { text: 'This command can only be used in groups.' });
+      return;
+    }
+
+    const { isSenderAdmin, isBotAdmin } = await isAdmin(api, chatId, senderId);
 
     if (!isBotAdmin) {
-        await sock.sendMessage(chatId, { 
-            text: 'Please make the bot an admin first.',
-            ...channelInfo 
-        });
-        return;
+      await api.sendMessage(chatId, { text: 'Please make the bot an admin first.' });
+      return;
     }
 
     if (!isSenderAdmin) {
-        await sock.sendMessage(chatId, { 
-            text: 'Only group admins can use the warn command.',
-            ...channelInfo 
+      await api.sendMessage(chatId, { text: 'Only group admins can use the warn command.' });
+      return;
+    }
+
+    if (mentions.length === 0) {
+      await api.sendMessage(chatId, { text: 'Please mention a user to warn.' });
+      return;
+    }
+
+    const warnings = loadWarnings();
+    const userToWarn = mentions[0];
+      const warningCount = warnings[userToWarn] || 0;
+      if (args[0] === 'list'){
+          return await api.sendMessage(chatId, { text: `User has ${warningCount} warning(s).` });
+      }
+
+    warnings[userToWarn] = warnings[userToWarn] ? warnings[userToWarn] + 1 : 1;
+    saveWarnings(warnings);
+
+    if (warnings[userToWarn] >= 3) {
+      try {
+        await api.groupParticipantsUpdate(chatId, [userToWarn], 'remove');
+        delete warnings[userToWarn];
+        saveWarnings(warnings);
+        await api.sendMessage(chatId, {
+          text: `User has been removed from the group after receiving 3 warnings.`,
         });
-        return;
-    }
-
-    let userToWarn;
-    
-    // Check for mentioned users
-    if (mentionedJids && mentionedJids.length > 0) {
-        userToWarn = mentionedJids[0];
-    }
-    // Check for replied message
-    else if (message.message?.extendedTextMessage?.contextInfo?.participant) {
-        userToWarn = message.message.extendedTextMessage.contextInfo.participant;
-    }
-    
-    if (!userToWarn) {
-        await sock.sendMessage(chatId, { 
-            text: 'Please mention the user or reply to their message to warn!', 
-            ...channelInfo 
+      } catch (error) {
+        await api.sendMessage(chatId, {
+          text: 'Failed to remove the user. Ensure the bot has admin privileges.',
         });
-        return;
+      }
+    } else {
+      await api.sendMessage(chatId, {
+        text: `User has been warned. Total warnings: ${warnings[userToWarn]}`,
+      });
     }
-
-    try {
-        // Read warnings, create empty object if file is empty
-        let warnings = {};
-        try {
-            warnings = JSON.parse(fs.readFileSync(warningsPath, 'utf8'));
-        } catch (error) {
-            warnings = {};
-        }
-
-        // Initialize nested objects if they don't exist
-        if (!warnings[chatId]) warnings[chatId] = {};
-        if (!warnings[chatId][userToWarn]) warnings[chatId][userToWarn] = 0;
-        
-        warnings[chatId][userToWarn]++;
-        fs.writeFileSync(warningsPath, JSON.stringify(warnings, null, 2));
-
-        await sock.sendMessage(chatId, { 
-            text: `⚠️ Warning ${warnings[chatId][userToWarn]}/3\n${userToWarn.split('@')[0]} has been warned!`,
-            mentions: [userToWarn],
-            ...channelInfo 
-        });
-
-        // Auto-kick after 3 warnings
-        if (warnings[chatId][userToWarn] >= 3) {
-            await sock.groupParticipantsUpdate(chatId, [userToWarn], "remove");
-            delete warnings[chatId][userToWarn];
-            fs.writeFileSync(warningsPath, JSON.stringify(warnings, null, 2));
-            
-            await sock.sendMessage(chatId, { 
-                text: `${userToWarn.split('@')[0]} has been kicked after receiving 3 warnings!`,
-                mentions: [userToWarn],
-                ...channelInfo 
-            });
-        }
-    } catch (error) {
-        console.error('Error in warn command:', error);
-        await sock.sendMessage(chatId, { 
-            text: 'Failed to warn user!', 
-            ...channelInfo 
-        });
-    }
-}
-
-module.exports = warnCommand;
+  },
+};

@@ -1,51 +1,49 @@
-const isAdmin = require('../helpers/isAdmin');
-const { channelInfo } = require('../config/messageConfig');
+const isAdmin = global.isAdmin
 
-async function kickCommand(sock, chatId, senderId, mentionedJids, message) {
-    const { isSenderAdmin, isBotAdmin } = await isAdmin(sock, chatId, senderId);
+  module.exports = {
+    config: {
+      name: 'kick',
+      aliases: ['remove'],
+      permission: 2,
+      prefix: true,
+      categorie: 'Moderation',
+      credit: 'Developed by Mohammad Nayan',
+      description: 'Kicks a user from the group.',
+      usages: [
+        `${global.config.PREFIX}kick @username - Remove a tagged user from the group.`,
+        `${global.config.PREFIX}kick (reply to a user) - Remove the replied user.`,
+        `${global.config.PREFIX}remove @username - Alias for kick command.`,
+      ]
+    },
 
+  start: async ({ event, api  }) => {
+    const { threadId, senderId, mentions, message} = event;
+    const { isSenderAdmin, isBotAdmin } = await isAdmin(api, threadId, senderId);
+
+    const replyMessage = message.message?.extendedTextMessage?.contextInfo;
     if (!isBotAdmin) {
-        await sock.sendMessage(chatId, { text: 'Please make the bot an admin first.' });
-        return;
+      await api.sendMessage(threadId, { text: 'Please make the bot an admin first.' });
+      return;
     }
 
     if (!isSenderAdmin) {
-        await sock.sendMessage(chatId, { text: 'Only group admins can use the kick command.' });
-        return;
+      await api.sendMessage(threadId, { text: 'Only group admins can use the kick command.' });
+      return;
     }
 
-    let usersToKick = [];
-    
-    // Check for mentioned users
-    if (mentionedJids && mentionedJids.length > 0) {
-        usersToKick = mentionedJids;
-    }
-    // Check for replied message
-    else if (message.message?.extendedTextMessage?.contextInfo?.participant) {
-        usersToKick = [message.message.extendedTextMessage.contextInfo.participant];
-    }
-    
-    // If no user found through either method
-    if (usersToKick.length === 0) {
-        await sock.sendMessage(chatId, { 
-            text: 'Please mention the user or reply to their message to kick!', 
-            ...channelInfo 
-        });
-        return;
+    if (replyMessage && replyMessage.participant) {
+      const userToKick = replyMessage.participant;
+      await api.groupParticipantsUpdate(threadId, [userToKick], 'remove');
+      await api.sendMessage(threadId, { text: 'User has been kicked from the group.' });
+      return;
     }
 
-    try {
-        await sock.groupParticipantsUpdate(chatId, usersToKick, "remove");
-        const mentions = usersToKick.map(jid => `@${jid.split('@')[0]}`).join(', ');
-        await sock.sendMessage(chatId, { 
-            text: `Successfully kicked ${mentions}!`,
-            mentions: usersToKick,
-            ...channelInfo 
-        });
-    } catch (error) {
-        console.error('Error in kick command:', error);
-        await sock.sendMessage(chatId, { text: 'Failed to kick user(s)!', ...channelInfo });
+    if (mentions.length > 0) {
+      console.log(`Mentioned users to kick: ${mentions}`);  // Debugging log
+      await api.groupParticipantsUpdate(threadId, mentions, 'remove');
+      await api.sendMessage(threadId, { text: 'User(s) have been kicked from the group.' });
+    } else {
+      await api.sendMessage(threadId, { text: 'Please reply to a user or tag a user to kick.' });
     }
-}
-
-module.exports = kickCommand;
+  },
+};
